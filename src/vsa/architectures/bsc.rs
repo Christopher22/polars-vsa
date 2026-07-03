@@ -40,6 +40,19 @@ impl<R: UIntResolution, Rng: rand::Rng + SeedableRng> Default for BinarySpatterC
     }
 }
 
+/// Majority-vote bundling with a random tiebreak, computed word-at-a-time instead of bit-by-bit.
+fn majority_bundle<R: UIntResolution>(
+    accumulator: &mut BitVec<R, Lsb0>,
+    vector: &BitVec<R, Lsb0>,
+    tiebreaker: &BitVec<R, Lsb0>,
+) {
+    let mut diff = accumulator.clone();
+    diff ^= vector.as_bitslice();
+    diff &= tiebreaker.as_bitslice();
+    *accumulator &= vector.as_bitslice();
+    *accumulator |= diff.as_bitslice();
+}
+
 impl<R, Rng> VectorSymbolicArchitecture for BinarySpatterCode<R, Rng>
 where
     R: UIntResolution,
@@ -67,15 +80,7 @@ where
 
     fn bundle(&self, accumulator: &mut Self::Accumulator, vector: &Self::Storage) {
         let tiebreaker = BitVec::<R, Lsb0>::random(&mut self.rng.write(), vector.len());
-        for ((mut acc_bit, vec_bit), tie_bit) in accumulator
-            .iter_mut()
-            .zip(vector.iter())
-            .zip(tiebreaker.iter())
-        {
-            if *acc_bit != *vec_bit {
-                *acc_bit = *tie_bit;
-            }
-        }
+        majority_bundle(accumulator, vector, &tiebreaker);
     }
 
     fn bundle_with_accumulator(
@@ -84,15 +89,7 @@ where
         vector: &Self::Accumulator,
     ) {
         let tiebreaker = BitVec::<R, Lsb0>::random(&mut self.rng.write(), vector.len());
-        for ((mut acc_bit, vec_bit), tie_bit) in accumulator
-            .iter_mut()
-            .zip(vector.iter())
-            .zip(tiebreaker.iter())
-        {
-            if *acc_bit != *vec_bit {
-                *acc_bit = *tie_bit;
-            }
-        }
+        majority_bundle(accumulator, vector, &tiebreaker);
     }
 
     fn bind_with_accumulator(a: &mut Self::Accumulator, b: &Self::Storage) {
@@ -123,6 +120,10 @@ where
         let mismatches = diff.count_ones() as f64;
         let dot = dim - 2.0 * mismatches;
         dot / dim
+    }
+
+    fn similarity_unnormalized(a: &Self::Accumulator, b: &Self::Accumulator) -> f64 {
+        Self::similarity(a, b)
     }
 }
 
@@ -197,5 +198,16 @@ mod tests {
         assert!((BinarySpatterCode::<u8>::similarity(&a, &b_same) - 1.0).abs() < 1e-12);
         assert!((BinarySpatterCode::<u8>::similarity(&a, &b_opposite) + 1.0).abs() < 1e-12);
         assert!(BinarySpatterCode::<u8>::similarity(&a, &b_half).abs() < 1e-12);
+    }
+
+    #[test]
+    fn similarity_unnormalized_matches_similarity() {
+        let a: BitVec<u8, Lsb0> = bitvec![u8, Lsb0; 1, 1, 0, 0];
+        let b: BitVec<u8, Lsb0> = bitvec![u8, Lsb0; 1, 0, 0, 1];
+
+        assert_eq!(
+            BinarySpatterCode::<u8>::similarity_unnormalized(&a, &b),
+            BinarySpatterCode::<u8>::similarity(&a, &b)
+        );
     }
 }

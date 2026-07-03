@@ -1,6 +1,6 @@
 [package]
 name = "symbolar"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Type-safe, Polars-compatible Vector Symbolic Architectures with storage and expression execution."
@@ -22,6 +22,7 @@ num-traits = "0.2.19"
 parking_lot = "0.12.5"
 polars = { version = "0.53.0", features = ["dtype-categorical"], optional = true }
 rand = "0.10.1"
+rustfft = "6.4.1"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.4.2", features = ["wasm_js"] }

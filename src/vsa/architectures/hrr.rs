@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rand::{RngExt, SeedableRng};
+use rustfft::{FftNum, FftPlanner, num_complex::Complex};
 
 use super::{
     FloatResolution, NonSelfInverseVectorSymbolicArchitecture, Storage, VectorSymbolicArchitecture,
@@ -51,26 +52,34 @@ impl<R: FloatResolution, Rng: rand::Rng> HolographicReducedRepresentation<R, Rng
             .sum::<R>()
             .sqrt()
     }
+}
 
+impl<R: FloatResolution + FftNum, Rng: rand::Rng> HolographicReducedRepresentation<R, Rng> {
     fn bind_values(a: &Vec<R>, b: &Vec<R>) -> Vec<R> {
         a.enforce_constraints(b);
-
         let len = a.len();
-        let mut out = vec![R::ZERO; len];
-        for (k, out_slot) in out.iter_mut().enumerate() {
-            let mut sum = R::ZERO;
-            for (i, &a_i) in a.iter().enumerate() {
-                let j = (k + len - i) % len;
-                sum += a_i * b[j];
-            }
-            *out_slot = sum;
-        }
 
-        out
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(len);
+        let ifft = planner.plan_fft_inverse(len);
+
+        let mut fa: Vec<Complex<R>> = a.iter().map(|&v| Complex::new(v, R::ZERO)).collect();
+        let mut fb: Vec<Complex<R>> = b.iter().map(|&v| Complex::new(v, R::ZERO)).collect();
+
+        fft.process(&mut fa);
+        fft.process(&mut fb);
+        for (x, y) in fa.iter_mut().zip(fb.iter()) {
+            *x *= *y;
+        }
+        ifft.process(&mut fa);
+
+        // rustfft's inverse transform is unnormalized.
+        let scale = R::one() / R::from(len).expect("dimension fits in R");
+        fa.into_iter().map(|c| c.re * scale).collect()
     }
 }
 
-impl<R: FloatResolution, Rng: rand::Rng> VectorSymbolicArchitecture
+impl<R: FloatResolution + FftNum, Rng: rand::Rng> VectorSymbolicArchitecture
     for HolographicReducedRepresentation<R, Rng>
 {
     type Storage = Vec<R>;
@@ -160,9 +169,13 @@ impl<R: FloatResolution, Rng: rand::Rng> VectorSymbolicArchitecture
 
         (dot / magnitude).as_()
     }
+
+    fn similarity_unnormalized(a: &Self::Accumulator, b: &Self::Accumulator) -> f64 {
+        Self::similarity(a, b)
+    }
 }
 
-impl<R: FloatResolution, Rng: rand::Rng> NonSelfInverseVectorSymbolicArchitecture
+impl<R: FloatResolution + FftNum, Rng: rand::Rng> NonSelfInverseVectorSymbolicArchitecture
     for HolographicReducedRepresentation<R, Rng>
 {
     fn inverse(a: &mut Self::Storage) {
@@ -236,6 +249,19 @@ mod tests {
             )
             .abs()
                 < 1e-12
+        );
+    }
+
+    #[test]
+    fn similarity_unnormalized_matches_similarity() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![2.0, -1.0, 0.0];
+
+        assert_eq!(
+            HolographicReducedRepresentation::<f64, rand::rngs::StdRng>::similarity_unnormalized(
+                &a, &b
+            ),
+            HolographicReducedRepresentation::<f64, rand::rngs::StdRng>::similarity(&a, &b)
         );
     }
 }

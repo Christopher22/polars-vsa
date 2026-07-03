@@ -235,6 +235,15 @@ impl<S: Size, V: VectorSymbolicArchitecture> Vector<S, V, NotNormalized<V>> {
         }
     }
 
+    /// Compute the similarity between two un-normalized vectors directly.
+    pub fn similarity(&self, other: &Self) -> f64 {
+        assert_eq!(
+            self.size, other.size,
+            "cannot compute similarity of vectors of different sizes"
+        );
+        V::similarity_unnormalized(&self.data.0, &other.data.0)
+    }
+
     /// Bind the accumulator with a normalized vector.
     /// You should prefer the Mul operator instead.
     pub fn bind(self, other: &Vector<S, V, Normalized<V>>) -> Self {

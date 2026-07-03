@@ -181,6 +181,10 @@ impl<R: FloatResolution, Rng: rand::Rng> VectorSymbolicArchitecture
 
         (dot / magnitude).as_()
     }
+
+    fn similarity_unnormalized(a: &Self::Accumulator, b: &Self::Accumulator) -> f64 {
+        Self::similarity(a, b)
+    }
 }
 
 impl<R: FloatResolution, Rng: rand::Rng> NonSelfInverseVectorSymbolicArchitecture
@@ -268,6 +272,19 @@ mod tests {
             )
             .abs()
                 < 1e-12
+        );
+    }
+
+    #[test]
+    fn similarity_unnormalized_matches_similarity() {
+        let a = vec![1.0, 2.0, 3.0, 4.0];
+        let b = vec![-1.0, -2.0, -3.0, -4.0];
+
+        assert_eq!(
+            VectorDerivedTransformationBinding::<f64, rand::rngs::StdRng>::similarity_unnormalized(
+                &a, &b
+            ),
+            VectorDerivedTransformationBinding::<f64, rand::rngs::StdRng>::similarity(&a, &b)
         );
     }
 

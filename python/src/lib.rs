@@ -264,6 +264,30 @@ macro_rules! define_architecture_bindings {
                 $vector_py::from_inner(py, self.inner.clone().normalize())
             }
 
+            /// Similarity computed directly on the un-normalized (pre-thresholding) data.
+            fn similarity(&self, other: &$vector_unnormalized_py) -> f64 {
+                self.inner.similarity(&other.inner)
+            }
+
+            /// Find the key of the highest-similarity candidate.
+            fn best_match(
+                &self,
+                py: Python<'_>,
+                candidates: std::collections::HashMap<String, Py<$vector_unnormalized_py>>,
+            ) -> Option<String> {
+                let mut best: Option<String> = None;
+                let mut best_sim = f64::NEG_INFINITY;
+                for (key, candidate) in &candidates {
+                    let candidate = candidate.borrow(py);
+                    let sim = self.inner.similarity(&candidate.inner);
+                    if sim > best_sim {
+                        best_sim = sim;
+                        best = Some(key.clone());
+                    }
+                }
+                best
+            }
+
             fn bind(
                 &self,
                 py: Python<'_>,

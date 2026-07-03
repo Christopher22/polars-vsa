@@ -45,6 +45,9 @@ pub trait VectorSymbolicArchitecture: Clone {
     /// Calculate a appopiate similarity for the architecture.
     fn similarity(a: &Self::Storage, b: &Self::Storage) -> f64;
 
+    /// Calculate a similarity directly on the un-normalized accumulator.
+    fn similarity_unnormalized(a: &Self::Accumulator, b: &Self::Accumulator) -> f64;
+
     /// Bind two vectors.
     fn bind(a: &mut Self::Storage, b: &Self::Storage);
 
@@ -121,6 +124,8 @@ impl<R: UIntResolution> Storage for BitVec<R, bitvec::order::Lsb0> {
 
 impl<R: UIntResolution> PrimaryStorage for BitVec<R, bitvec::order::Lsb0> {
     fn random<Rng: rand::Rng>(rng: &mut Rng, size: usize) -> Self {
+        // Bit-by-bit on purpose: batching via `extend_from_bitslice` measured no gain here,
+        // since the `u64` source word never type-matches `BitVec<R, _>`'s own store type.
         let mut out = BitVec::with_capacity(size);
         let words = size / 64;
 
@@ -221,3 +226,42 @@ impl<T> FloatResolution for T where
 /// A resolution of a data type limited to unsigned integers.
 pub trait UIntResolution: Resolution + Unsigned + bitvec::store::BitStore + Ord + Eq {}
 impl<T> UIntResolution for T where T: Resolution + Unsigned + bitvec::store::BitStore + Ord + Eq {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    #[test]
+    fn random_bitvec_has_expected_length_and_is_deterministic_per_seed() {
+        // Spans a partial word, a single full word, and several full words plus a
+        // remainder, for both a byte-sized and a multi-byte backing store type.
+        for size in [0, 3, 8, 64, 100, 10_000] {
+            let mut rng_a = rand::rngs::StdRng::seed_from_u64(42);
+            let mut rng_b = rand::rngs::StdRng::seed_from_u64(42);
+
+            let a: BitVec<u8, bitvec::order::Lsb0> =
+                <BitVec<u8, bitvec::order::Lsb0> as PrimaryStorage>::random(&mut rng_a, size);
+            let b: BitVec<u8, bitvec::order::Lsb0> =
+                <BitVec<u8, bitvec::order::Lsb0> as PrimaryStorage>::random(&mut rng_b, size);
+
+            assert_eq!(a.len(), size, "wrong length at size {size}");
+            assert_eq!(a, b, "same seed must produce the same bits at size {size}");
+        }
+    }
+
+    #[test]
+    fn random_bitvec_is_not_degenerate() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let bits: BitVec<usize, bitvec::order::Lsb0> =
+            <BitVec<usize, bitvec::order::Lsb0> as PrimaryStorage>::random(&mut rng, 10_000);
+        let ones = bits.count_ones();
+        // A fair coin over 10,000 draws should land nowhere near all-0 or all-1; this only
+        // guards against a gross generation bug (e.g. every word coming out as 0), not the
+        // exact distribution.
+        assert!(
+            ones > 3_000 && ones < 7_000,
+            "suspiciously biased: {ones} ones out of 10000"
+        );
+    }
+}
