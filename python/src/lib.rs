@@ -551,6 +551,22 @@ macro_rules! define_architecture_bindings {
                 }
             }
 
+            /// Bundle rows grouped by an externally supplied per-row key (e.g. a sample or class id)
+            fn bundle_dataset_temporal_grouped(
+                &self,
+                py: Python<'_>,
+                groups: Vec<i64>,
+            ) -> PyResult<std::collections::HashMap<i64, Py<$vector_unnormalized_py>>> {
+                let subset = self.build_subset()?;
+                let grouped = subset
+                    .bundle_groups_temporal::<i64, NotNormalized<$architecture_inner>>(&groups)
+                    .map_err(map_error)?;
+                grouped
+                    .into_iter()
+                    .map(|(k, v)| Ok((k, $vector_unnormalized_py::from_inner(py, v)?)))
+                    .collect()
+            }
+
             fn bind_dataset(&self, py: Python<'_>) -> PyResult<Option<Py<$vector_py>>> {
                 let subset = self.build_subset()?;
                 match subset.bind_dataset::<SamplesWithColumnVector>() {

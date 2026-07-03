@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "symbolar"
-version = "0.11.0"
+version = "0.13.0"
 description = "Combining vector symbolic architectures with Polars for efficient, scalable, and expressive data manipulation in Python."
 requires-python = ">=3.10"
 dependencies = ["polars>=1.0"]

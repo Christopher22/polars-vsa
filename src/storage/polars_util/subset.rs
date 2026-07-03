@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use polars::prelude::*;
 
 use super::ColumnType;
@@ -249,6 +251,80 @@ impl<'a, S: Size, V: VectorSymbolicArchitecture> Subset<'a, S, V> {
         self.bind_vectors(self.bind_rows::<I>())
     }
 
+    /// Bundle rows into per-group vectors in a single pass, grouping by an externally supplied key (one entry per row, in the same order as the subset's underlying DataFrame), binding each row's cells together via their column position (equivalent to `SamplesWithPosition`).
+    pub fn bundle_groups_temporal<G: Copy + Eq + std::hash::Hash, T: VectorType<V>>(
+        &self,
+        groups: &[G],
+    ) -> Result<HashMap<G, Vector<S, V, T>>, Error> {
+        if groups.len() != self.height() {
+            return Err(Error::GroupCountMismatch {
+                expected: self.height(),
+                found: groups.len(),
+            });
+        }
+
+        let shifted: Vec<Vec<V::Storage>> = (0..self.width)
+            .map(|shift| {
+                self.storage
+                    .vectors
+                    .vectors
+                    .iter()
+                    .map(|v| {
+                        let mut data = v.data.0.clone();
+                        V::permute(&mut data, shift);
+                        data
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let mut accumulators: HashMap<G, V::Accumulator> = HashMap::new();
+
+        for (y, &group) in groups.iter().enumerate() {
+            let mut row_value: Option<V::Storage> = None;
+            for (x, shifted_vector) in shifted.iter().enumerate().take(self.width) {
+                let index = self.calculate_index(x, y);
+                let Some(vector_index) = self.vectors[index] else {
+                    continue;
+                };
+                let source = &shifted_vector[vector_index.0];
+
+                match row_value.as_mut() {
+                    None => {
+                        row_value = Some(source.clone());
+                    }
+                    Some(acc) => {
+                        V::bind(acc, source);
+                    }
+                }
+            }
+
+            let Some(row_value) = row_value else {
+                continue;
+            };
+            let denormalized = V::denormalize(row_value);
+            match accumulators.entry(group) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    self.storage
+                        .vectors
+                        .vsa
+                        .bundle_with_accumulator(e.get_mut(), &denormalized);
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(denormalized);
+                }
+            }
+        }
+
+        Ok(accumulators
+            .into_iter()
+            .map(|(g, acc)| {
+                let vsa = self.storage.vectors.vsa.clone();
+                (g, Vector::new(vsa, self.storage.vectors.size, acc))
+            })
+            .collect())
+    }
+
     fn bundle_vectors<T1: VectorType<V>, T2: VectorType<V>>(
         &self,
         iterator: impl Iterator<Item = Option<Vector<S, V, T1>>>,
@@ -330,6 +406,13 @@ pub enum Error {
     },
     /// The underlying Polars library returned an error.
     PolarsError(PolarsError),
+    /// The number of supplied group keys did not match the number of rows in the subset.
+    GroupCountMismatch {
+        /// The number of rows in the subset.
+        expected: usize,
+        /// The number of group keys that were supplied.
+        found: usize,
+    },
 }
 
 impl From<PolarsError> for Error {
@@ -349,6 +432,11 @@ impl std::fmt::Display for Error {
                 write!(f, "value '{}' not found in column '{}'", value, column)
             }
             Error::PolarsError(err) => write!(f, "polars error: {}", err),
+            Error::GroupCountMismatch { expected, found } => write!(
+                f,
+                "expected {} group keys (one per row), found {}",
+                expected, found
+            ),
         }
     }
 }
@@ -721,5 +809,66 @@ mod tests {
                 .bundle_dataset_with_binding::<_, SamplesWithPosition>()
                 .expect("valid dataset vector")
         );
+    }
+
+    #[test]
+    fn test_bundle_groups_with_binding() {
+        let df = create_dollar_dataframe();
+        let vsa = crate::architectures::MultiplyAddPermute::<u8>::new(42);
+        let storage =
+            Storage::from_dataframe(vsa, crate::Fixed::<10000>, &df).expect("valid vector storage");
+
+        let expected_group_0: crate::Expression = "USA * (DOL ^ 1) * (WDC ^ 2)"
+            .parse()
+            .expect("valid expression");
+        let expected_group_1: crate::Expression = "MEX * (PES ^ 1) * (MXC ^ 2)"
+            .parse()
+            .expect("valid expression");
+
+        let subset = storage.subset(&df).expect("valid subset");
+        let mut grouped = subset
+            .bundle_groups_temporal::<
+                usize,
+                Normalized<crate::architectures::MultiplyAddPermute<u8>>,
+            >(&[0, 1])
+            .expect("valid grouping");
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(
+            storage
+                .execute(&expected_group_0)
+                .expect("valid execution")
+                .into_owned(),
+            grouped.remove(&0).expect("group 0 present")
+        );
+        assert_eq!(
+            storage
+                .execute(&expected_group_1)
+                .expect("valid execution")
+                .into_owned(),
+            grouped.remove(&1).expect("group 1 present")
+        );
+    }
+
+    #[test]
+    fn test_bundle_groups_with_binding_length_mismatch() {
+        let df = create_dollar_dataframe();
+        let vsa = crate::architectures::MultiplyAddPermute::<u8>::new(42);
+        let storage =
+            Storage::from_dataframe(vsa, crate::Fixed::<10000>, &df).expect("valid vector storage");
+        let subset = storage.subset(&df).expect("valid subset");
+
+        let result = subset.bundle_groups_temporal::<
+            usize,
+            Normalized<crate::architectures::MultiplyAddPermute<u8>>,
+        >(&[0]);
+
+        assert!(matches!(
+            result,
+            Err(Error::GroupCountMismatch {
+                expected: 2,
+                found: 1
+            })
+        ));
     }
 }
