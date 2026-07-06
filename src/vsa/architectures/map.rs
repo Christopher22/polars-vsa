@@ -143,12 +143,20 @@ impl<R: UIntResolution + PrimInt, RM: IntResolution, Rng: rand::Rng> VectorSymbo
     }
 
     fn bundle(&self, accumulator: &mut Self::Accumulator, vector: &Self::Storage) {
-        accumulator
-            .iter_mut()
-            .zip(vector.0.iter())
-            .for_each(|(acc, bit)| {
-                *acc += Self::bit_to_resolution(*bit);
-            })
+        // Unpack whole words directly into the accumulator instead of going through BitVec's per-bit iterator
+        let bits_per_word = size_of::<R>() * 8;
+        let mut remaining = accumulator.len();
+        let mut idx = 0;
+        for &word in vector.0.as_raw_slice() {
+            let take = remaining.min(bits_per_word);
+            let mut w = word;
+            for _ in 0..take {
+                accumulator[idx] += Self::bit_to_resolution((w & R::one()) == R::one());
+                idx += 1;
+                w = w >> 1;
+            }
+            remaining -= take;
+        }
     }
 
     fn bundle_with_accumulator(
@@ -167,9 +175,7 @@ impl<R: UIntResolution + PrimInt, RM: IntResolution, Rng: rand::Rng> VectorSymbo
     fn bind(a: &mut Self::Storage, b: &Self::Storage) {
         a.enforce_constraints(b);
 
-        // Binding is XNOR, i.e. NOT(XOR). Compute it word-at-a-time via BitVec's own
-        // bitwise operators (like `similarity` already does) instead of iterating bit by
-        // bit, which goes through a much slower per-bit proxy reference.
+        // Binding is XNOR, i.e. NOT(XOR). Compute it word-at-a-time via BitVec's own bitwise operators.
         a.0 ^= b.0.as_bitslice();
         a.0 = !std::mem::take(&mut a.0);
     }

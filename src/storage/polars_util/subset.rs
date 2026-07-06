@@ -302,16 +302,12 @@ impl<'a, S: Size, V: VectorSymbolicArchitecture> Subset<'a, S, V> {
             let Some(row_value) = row_value else {
                 continue;
             };
-            let denormalized = V::denormalize(row_value);
             match accumulators.entry(group) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {
-                    self.storage
-                        .vectors
-                        .vsa
-                        .bundle_with_accumulator(e.get_mut(), &denormalized);
+                    self.storage.vectors.vsa.bundle(e.get_mut(), &row_value);
                 }
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert(denormalized);
+                    e.insert(V::denormalize(row_value));
                 }
             }
         }
